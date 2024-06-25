@@ -518,8 +518,8 @@ C Convention: the input file concentration units are always ppmV.
          CALL INITSCEN ( CGRID, TSTEP )
          JDATE = STDATE; JTIME = STTIME
         
-C JTK call opGSI module for running GSI         
-         CALL OPGSI(JDATE, JTIME)
+C JTK call OPASSIM module for running GSI         
+         CALL OPASSIM ( CGRID, JDATE, JTIME, TSTEP(1) )
 
 #ifdef sens
          STARTDATE = STDATE   ! save variable into DDM3D module

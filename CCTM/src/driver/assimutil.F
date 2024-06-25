@@ -26,22 +26,35 @@
 !           assimilation scripts will need to be updated substantially   !
 !------------------------------------------------------------------------!
       MODULE ASSIMUTIL
-      CONTAINS
+
+      #ifdef parallel
+          USE SE_MODULES            ! stenex (using SE_UTIL_MODULE)
+      #else
+          USE NOOP_MODULES          ! stenex (using NOOP_UTIL_MODULE)
+      #endif
+
+
+
       ! ASSIMRUN - run assimilation
       ! opASSIM - output state for assimilation
       ! rdASSIM - read in state from assimilation
-      IMPLICIT NONE
+c     IMPLICIT NONE
       integer :: ASSIMTSTEP = 10000
       character*1024 :: ASSIMSCRIPT
       logical :: LDOASSIM
-      
+     
+      CONTAINS
+
 !:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
       SUBROUTINE ASSIMINIT()
           ! ASSIMINIT declares retrieves all global variables from the environment.
           use get_env_module
-          ! DOASSIM, ASSIMSCRIPT and ASSIMTSTEP from environment
-          INTEGER          :: VARDEV = -1
+          ! DOASSIM, ASSIMSCRIPT and ASSIMTSTEP from environment 
+
           IMPLICIT NONE
+
+
+          INTEGER          :: VARDEV = -1
           CALL GET_ENV( LDOASSIM, 'DOASSIM', LDOASSIM, VARDEV )
           CALL GET_ENV( ASSIMSCRIPT, 'ASSIMSCRIPT', ASSIMSCRIPT, VARDEV )
           CALL GET_ENV( ASSIMTSTEP, 'ASSIMTSTEP', ASSIMTSTEP, VARDEV )
@@ -57,6 +70,8 @@
           USE RUNTIME_VARS
           USE CENTRALIZED_IO_MODULE
 
+          IMPLICIT NONE
+
           REAL, POINTER :: CGRID( :,:,:,: )  ! for initial CONC
           INTEGER      :: JDATE        ! starting date (YYYYDDD)
           INTEGER      :: JTIME        ! starting time (HHMMSS)
@@ -65,7 +80,8 @@
           LOGICAL ::  exists, STATUS
           INTEGER :: checkcount
           LOGICAL, SAVE :: FIRST = .true.
-          IMPLICIT NONE
+          character*1024 :: XMSG ! JTK
+          character*1024 :: PNAME ! JTK
 
           IF (FIRST) THEN
               ! make sure LDOASSIM, ASSIMTSTEP and ASSIMSCRIPT are defined.
@@ -87,13 +103,12 @@
                     IF (STATUS.ne.0) THEN
                         XMSG='***Failure, ASSIM script failed'
                         CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
-                        exit
                     ENDIF
                   ENDIF ! if primary processor
                   ! WAIT for all processors
                   CALL SUBST_BARRIER
                   ! Update CGRID from CTM_ASSIM_1
-                  call rdASSIM(cconc,jdate,jtime,cgrid)
+                  call rdASSIM(jdate,jtime,cgrid)
               ENDIF ! IF ISASSIMTIME
           ENDIF ! END ASSIM SWITCH
       END SUBROUTINE ASSIMRUN
@@ -137,10 +152,13 @@
 
     !JDE      INTEGER      LOGDEV
 
-          INTEGER      K, KD=5, L=1, SPC=0   ! loop counters
+          INTEGER      K
+          INTEGER :: KD=5
+          INTEGER :: L=1
+          INTEGER :: SPC=0   ! loop counters
           INTEGER      INDX
-          INTEGER      INO2=-1,VNO2=-1 ! pointer to NO2 information
-          IMPLICIT NONE
+          INTEGER ::     INO2=-1
+          INTEGER ::     VNO2=-1 ! pointer to NO2 information
 
     !-----------------------------------------------------------------------
 
@@ -311,9 +329,9 @@
           endif
           IF ( .NOT. XTRACT3( FNAME, VNAME3D ( 1 ),
      &           1,NLAYS, STRTROWINI,ENDROWINI, STRTCOLINI,ENDCOLINI,
-         &           JDATE, JTIME, DBUFF ) ) THEN
+     &           JDATE, JTIME, DBUFF ) ) THEN
                    XMSG = 'Could not read ' // TRIM( VNAME3D( 1 ) )
-         &              // ' from ' // FNAME
+     &              // ' from ' // FNAME
                    CALL M3EXIT ( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
           END IF
           INDX = CONC_MAP( VNO2 )
@@ -330,3 +348,8 @@
           END IF
           RETURN
       END SUBROUTINE rdASSIM
+
+
+      END MODULE ASSIMUTIL
+
+
