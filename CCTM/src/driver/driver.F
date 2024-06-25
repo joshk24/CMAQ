@@ -108,6 +108,8 @@ C-----------------------------------------------------------------------
       USE AERO_DATA
       USE ELMO_DATA, ONLY : L_ELMO
       USE ELMO_PROC, ONLY : ELMO_DRIVER, WRITE_ELMO, MAP_ELMO
+      USE GSIUTIL ! JTK use GSIUTIL module which performs functions of
+! both opGSI and rdGSI
 #ifdef mpas
       USE CGRID_SPCS            ! CGRID mechanism species
       USE HGRD_DEFN, ONLY: MYPE
@@ -515,6 +517,9 @@ C Initialize conc field: Copy IC's to CONC file as step 0
 C Convention: the input file concentration units are always ppmV.
          CALL INITSCEN ( CGRID, TSTEP )
          JDATE = STDATE; JTIME = STTIME
+        
+C JTK call opGSI module for running GSI         
+         CALL OPGSI(JDATE, JTIME)
 
 #ifdef sens
          STARTDATE = STDATE   ! save variable into DDM3D module
