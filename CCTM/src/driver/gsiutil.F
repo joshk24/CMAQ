@@ -1,0 +1,352 @@
+!------------------------------------------------------------------------!
+!  The Community Multiscale Air Quality (CMAQ) system software is in     !
+!  continuous development by various groups and is based on information  !
+!  from these groups: Federal Government employees, contractors working  !
+!  within a United States Government contract, and non-Federal sources   !
+!  including research institutions.  These groups give the Government    !
+!  permission to use, prepare derivative works of, and distribute copies !
+!  of their work in the CMAQ system to the public and to permit others   !
+!  to do so.  The United States Environmental Protection Agency          !
+!  therefore grants similar permission to use the CMAQ system software,  !
+!  but users are requested to provide copies of derivative works or      !
+!  products designed to operate in the CMAQ system to the United States  !
+!  Government without restrictions as to use by others.  Software        !
+!  that is used with the CMAQ system but distributed under the GNU       !
+!  General Public License or the GNU Lesser General Public License is    !
+!  subject to their copyright restrictions.                              !
+!------------------------------------------------------------------------!
+
+!------------------------------------------------------------------------!
+! WORK IN PROGRESS:                                                      !
+! AJ Lenzen started this as a combination of commands in driver.F,       !
+!    opGSI.F and rdGSI.F                                                 !
+! JD East updated it and merged it into v532+                            !
+! BH Henderson made it a single module and simplified the interface      !
+!   status: conceptually works, but needs to be compiled and tested      !
+!           assimilation scripts will need to be updated substantially   !
+!------------------------------------------------------------------------!
+      !JK Kumm updated module names to work with GSI environmwnt
+      MODULE GSIUTIL
+      CONTAINS
+      ! GSIRUN - run assimilation
+      ! opGSI - output state for assimilation
+      ! rdGSI - read in state from assimilation
+      IMPLICIT NONE
+      integer :: GSITSTEP = 10000
+      character*1024 :: GSISCRIPT
+      logical :: LDOGSI
+      
+!:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+      SUBROUTINE GSIINIT()
+          ! GSIINIT declares retrieves all global variables from the environment.
+          use get_env_module
+          ! DOGSI, GSISCRIPT and GSITSTEP from environment
+          INTEGER          :: VARDEV = -1
+          IMPLICIT NONE
+          CALL GET_ENV( LDOGSI, 'DOGSI', LDOGSI, VARDEV )
+          CALL GET_ENV( GSISCRIPT, 'GSISCRIPT', GSISCRIPT, VARDEV )
+          CALL GET_ENV( GSITSTEP, 'GSITSTEP', GSITSTEP, VARDEV )
+      END SUBROUTINE
+
+!:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+      SUBROUTINE GSIRUN (CGRID, JDATE, JTIME, TSTEP )
+          ! GSIRUN checks if assimilation should run and executes:
+          ! 1) opGSI
+          ! 2) GSISCRIPT
+          ! 3) waits for GSIDONE to exist
+          ! 4) rdGSI
+          USE UTILIO_DEFN
+          USE RUNTIME_VARS
+          USE CENTRALIZED_IO_MODULE
+
+          REAL, POINTER :: CGRID( :,:,:,: )  ! for initial CONC
+          INTEGER      :: JDATE        ! starting date (YYYYDDD)
+          INTEGER      :: JTIME        ! starting time (HHMMSS)
+          INTEGER      :: TSTEP        ! output timestep (HHMMSS)
+          ! Variables to control GSI output and script
+          LOGICAL ::  exists
+          INTEGER :: checkcount
+          LOGICAL, SAVE :: FIRST = .true.
+          IMPLICIT NONE
+
+          IF (FIRST) THEN
+              ! make sure LDOGSI, GSITSTEP and GSISCRIPT are defined.
+              call GSIINIT()
+              FIRST = .false.
+          ENDIF
+
+          IF ( LDOGSI ) then ! switch for GSI on or off
+              ! check if CMAQ is at an ASSSIMILATION time
+              IF ( MOD( TIME2SEC( JTIME ), TIME2SEC( GSITSTEP ) ) .EQ. 0 ) THEN
+                  call opGSI(cgrid,jdate,jtime,tstep(1))
+                  if(mype.eq.0)then ! IF PRIMARY PROCESSOR
+                    ! GSISCRIPT should assume the existence of the CTM_GSI_1
+                    ! environmental variable that points to the current state.
+                    ! from that file, it can identify the JDATE, JTIME and available
+                    ! variables.
+                    call system(GSISCRIPT)
+                    checkcount=0
+                    do while (.true.)
+                      call sleep(1)
+                      inquire(file='GSIDONE',exist=exists)
+                      if (exists) then
+                        XMSG = 'GSIDONE detected; CMAQ resuming'
+                        CALL M3WARN( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+                        exit
+                      end if
+                      checkcount=checkcount+1
+                      if (checkcount.gt.600) then
+                        XMSG = 'ERROR: GSI too slow: CMAQ waited >10 minutes for GSIDONE'    
+                        CALL M3WARN( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+                        XMSG = 'ERROR: GSI too slow: check GSI logs for error'
+                        CALL M3WARN( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+                        XMSG = 'ERROR: GSI too slow: Exiting CMAQ'
+                        CALL M3WARN( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+                        XMSG='***Failure, GSIDONE not detected'
+                        CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+                        exit
+                      end if
+                    end do
+                    call system('/bin/rm GSIDONE') ! remove file
+                  endif ! if primary processor
+                  ! WAIT for all processors
+                  CALL SUBST_BARRIER
+    !             retrieve updated state from GSI
+                  call rdGSI(cconc,jdate,jtime,cgrid)
+              endif ! END FLAGGED FOR GSI
+            endif ! IF output time
+          endif ! END GSI SWITCH
+      END SUBROUTINE GSIRUN
+
+!:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+      SUBROUTINE OPGSI (CGRID, JDATE, JTIME, TSTEP )
+          ! OPGSI outputs CGRID to a netcdf file for assimilation
+          ! script to read in
+          USE GRID_CONF             ! horizontal & vertical domain specifications
+          USE WVEL_DEFN             ! derived vertical velocity component -- BHH: not using this... right?
+          USE STD_CONC              ! standard CONC
+          USE UTILIO_DEFN           ! M3WARN etc.
+          USE SE_MODULES            ! stenex
+
+          IMPLICIT NONE
+
+          INCLUDE SUBST_FILES_ID    ! file name parameters
+
+    ! Arguments:
+          REAL, POINTER :: CGRID( :,:,:,: )  ! for initial CONC
+          INTEGER      JDATE        ! starting date (YYYYDDD)
+          INTEGER      JTIME        ! starting time (HHMMSS)
+          INTEGER      TSTEP        ! output timestep (HHMMSS)
+
+    ! Local Variables:
+
+          REAL, ALLOCATABLE :: DBUFF( :,:,: )
+          INTEGER      ALLOCSTAT
+          INTEGER      STATUS               !  ENVINT status
+
+          CHARACTER( 16 ) :: PNAME = 'OPGSI'
+          CHARACTER( 96 ) :: XMSG = ' '
+          CHARACTER( 28 ) :: SSTR = ' species saved to GSI file:'
+
+    ! environment variable for no. of layers from bottom to save on CONC file
+          CHARACTER( 16 ) :: NLAYS_CONC = 'NLAYS_CONC'
+          character(16) CTMGSI
+
+    !  environment variable description
+          CHARACTER( 80 ) :: VARDESC
+
+    !JDE      INTEGER      LOGDEV
+
+          INTEGER      K, KD=5, L=1, SPC=0   ! loop counters
+          INTEGER      INDX
+          INTEGER      INO2=-1,VNO2=-1 ! pointer to NO2 information
+          IMPLICIT NONE
+
+    !-----------------------------------------------------------------------
+
+          CALL SUBST_BARRIER
+
+    ! Set output file characteristics based on COORD.EXT and open it
+    ! need to replace output with a revolving time file
+          CTMGSI='CTM_GSI_1'
+
+          FTYPE3D = GRDDED3
+          SDATE3D = JDATE
+          STIME3D = JTIME
+          TSTEP3D = TSTEP
+          NVARS3D = 1
+          NCOLS3D = GL_NCOLS
+          NROWS3D = GL_NROWS
+          NLAYS3D = NLAYS
+          NTHIK3D = 1
+          GDTYP3D = GDTYP_GD
+          P_ALP3D = P_ALP_GD
+          P_BET3D = P_BET_GD 
+          P_GAM3D = P_GAM_GD
+          XORIG3D = XORIG_GD
+          YORIG3D = YORIG_GD
+          XCENT3D = XCENT_GD
+          YCENT3D = YCENT_GD
+          XCELL3D = XCELL_GD
+          YCELL3D = YCELL_GD
+          VGTYP3D = VGTYP_GD
+          VGTOP3D = VGTOP_GD
+          DO L = 1, NLAYS3D + 1
+             VGLVS3D( L ) = VGLVS_GD( L )
+          END DO
+          GDNAM3D = GRID_NAME  ! from HGRD_DEFN
+
+          FDESC3D( 1 ) = 'Concentration file output'
+          FDESC3D( 2 ) = 'From CMAQ model dyn alloc version CTM'
+          FDESC3D( 3 ) = 'Set of variables just NO2'
+          FDESC3D( 4 ) = 'For next scenario continuation runs,'
+          FDESC3D( 5 ) = 'use the "one-step" CGRID file'
+          KD = 5
+          DO L = 1, MIN ( NLAYS3D, MXDESC3 - KD )
+             WRITE( FDESC3D( L + KD ),'( "Layer", I3, " to", I3, " " )' )
+     &   L, L
+          END DO
+          IF ( ( KD + 1 + L ) .LT. MXDESC3 ) THEN
+             DO K = KD + 1 + L, MXDESC3
+                FDESC3D( K ) = ' '
+             END DO
+          END IF
+
+          ino2=-1
+          vno2=-1
+          DO SPC = 1, N_C_GC_SPC
+             if( C_GC_SPC( SPC ).eq.'NO2')then
+               INO2=SPC
+               VNO2=SPC
+               ! FOUND NO2, so exit loop
+               exit
+             endif
+          END DO
+          if (INO2<1)then
+                XMSG = 'Could not find NO2'
+                CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+          endif
+          VTYPE3D( 1 ) = M3REAL
+          VNAME3D( 1 ) = C_GC_SPC( VNO2 )
+          UNITS3D( 1 ) = 'ppmV'
+          VDESC3D( 1 ) = 'Variable ' // VNAME3D( 1 )
+
+    ! create header
+          IF ( MYPE .EQ. 0 ) THEN   ! open new
+             IF ( .NOT. OPEN3( CTMGSI, FSNEW3, PNAME ) ) THEN
+                XMSG = 'opGSI Could not open ' // CTMGSI // '. File may already exist.' 
+                CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+             END IF
+          END IF
+          CALL SUBST_BARRIER
+          if ( .not. io_pe_inclusive ) then !JDE
+            IF ( .NOT. OPEN3( CTMGSI, FSREAD3, PNAME ) ) THEN
+               XMSG = 'opGSI Could not open ' // CTMGSI
+               CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+            END IF
+          end if !JDE if PE0
+          CALL SUBST_BARRIER
+
+    ! write the initial concentrations as step 0 on the conc file
+    ! (inital data assumed to be in correct output units)
+
+          ALLOCATE ( DBUFF( NCOLS,NROWS,NLAYS ), STAT = ALLOCSTAT )
+          IF ( ALLOCSTAT .NE. 0 ) THEN
+             XMSG = 'Failure allocating DBUFF'
+             CALL M3EXIT ( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+          END IF
+
+          WRITE( LOGDEV,* ) ' '
+          INDX = CONC_MAP( VNO2 )
+
+          DBUFF = CGRID( 1:NCOLS,1:NROWS,1:NLAYS,INDX )
+
+          IF ( .NOT. WRITE3( CTMGSI, C_GC_SPC( VNO2 ),
+     &                    JDATE, JTIME, DBUFF ) ) THEN
+              XMSG = 'opGSI Could not write ' //
+     &           TRIM( C_GC_SPC( VNO2 ) ) //
+     &           ' to ' // CTMGSI
+              CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+          END IF
+
+          DEALLOCATE ( DBUFF )
+
+          WRITE( LOGDEV, '( /5X, 3( A, :, 1X ), I8, ":", I6.6 )' )
+     &  'Timestep written to', CTMGSI,
+     &  'for date and time', JDATE, JTIME
+          WRITE( LOGDEV, '(  5X,  A, 1X, I8, ":", I6.6 )' )
+     &  'from timestep on initial data files for date and time',
+     &   JDATE, JTIME
+          IF ( .NOT. CLOSE3( CTMGSI ) ) THEN 
+             XMSG = 'opgsi Could not close file "' // TRIM( CTMGSI ) // '"'
+             CALL M3EXIT( PNAME, 0, 0, XMSG, XSTAT2 )
+          END IF
+
+          RETURN
+      END SUBROUTINE
+
+!:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+      SUBROUTINE rdGSI(JDATE,JTIME,CGRID)
+          ! OPGSI outputs CGRID to a netcdf file for assimilation
+          ! script to read in
+          USE GRID_CONF             ! horizontal & vertical domain specifications
+          USE CGRID_SPCS            ! CGRID mechanism species
+          USE UTILIO_DEFN
+          USE STD_CONC
+
+          IMPLICIT NONE
+
+          INCLUDE SUBST_CONST       ! constants
+          INCLUDE SUBST_FILES_ID    ! file name parameters
+
+          CHARACTER( 16 ) :: FNAME = 'CTM_GSI_1'
+          INTEGER      JDATE
+          INTEGER      JTIME,l,r,c
+          REAL, POINTER :: CGRID( :,:,:,: )  ! for initial CONC
+          REAL      :: DBUFF( NCOLS,NROWS,NLAYS )
+          INTEGER       :: STRTCOLINI, ENDCOLINI, STRTROWINI, ENDROWINI
+          INTEGER      GXOFF, GYOFF               ! global origin offset from file
+          CHARACTER( 96 ) :: XMSG = ' '
+          CHARACTER( 16 ) :: PNAME = 'RDGSI'
+          INTEGER :: INDX
+          INTEGER :: INO2=-1,VNO2=-1 ! pointer to NO2 information
+          INTEGER :: SPC=0
+
+          IF ( .NOT. OPEN3( FNAME, FSREAD3, PNAME ) ) THEN
+             XMSG = 'Could not open ' // FNAME // ' file'
+             CALL M3EXIT ( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+          END IF
+          CALL SUBHFILE ( fname, GXOFF, GYOFF,
+     &                STRTCOLINI, ENDCOLINI, STRTROWINI, ENDROWINI )
+          DO SPC = 1, N_C_GC_SPC
+             if( C_GC_SPC( SPC ).eq.'NO2')then
+               INO2=SPC
+               VNO2=SPC
+               exit
+             endif
+          END DO
+          if (INO2<1)then
+                XMSG = 'Could not find NO2'
+                CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+          endif
+          IF ( .NOT. XTRACT3( FNAME, VNAME3D ( 1 ),
+     &           1,NLAYS, STRTROWINI,ENDROWINI, STRTCOLINI,ENDCOLINI,
+         &           JDATE, JTIME, DBUFF ) ) THEN
+                   XMSG = 'Could not read ' // TRIM( VNAME3D( 1 ) )
+         &              // ' from ' // FNAME
+                   CALL M3EXIT ( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+          END IF
+          INDX = CONC_MAP( VNO2 )
+          DO L = 1, NLAYS
+            DO R = 1, NROWS
+              DO C = 1, NCOLS
+                CGRID( C,R,L,INDX ) = DBUFF( C,R,L )
+              END DO
+            END DO
+          END DO
+          IF ( .NOT. CLOSE3( fname ) ) THEN 
+            XMSG = 'rdassim Could not close file "' // TRIM( fname ) // '"'
+            CALL M3EXIT( PNAME, 0, 0, XMSG, XSTAT2 )
+          END IF
+          RETURN
+      END SUBROUTINE rdGSI
