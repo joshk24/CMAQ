@@ -108,7 +108,7 @@ C-----------------------------------------------------------------------
       USE AERO_DATA
       USE ELMO_DATA, ONLY : L_ELMO
       USE ELMO_PROC, ONLY : ELMO_DRIVER, WRITE_ELMO, MAP_ELMO
-      USE GSIUTIL ! JTK use GSIUTIL module which performs functions of
+      USE ASSIMUTIL ! JTK use ASSIMUTIL module which performs functions of
 ! both opGSI and rdGSI
 #ifdef mpas
       USE CGRID_SPCS            ! CGRID mechanism species
