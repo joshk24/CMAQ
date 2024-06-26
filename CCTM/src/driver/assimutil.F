@@ -27,11 +27,11 @@
 !------------------------------------------------------------------------!
       MODULE ASSIMUTIL
 
-      #ifdef parallel
-          USE SE_MODULES            ! stenex (using SE_UTIL_MODULE)
-      #else
-          USE NOOP_MODULES          ! stenex (using NOOP_UTIL_MODULE)
-      #endif
+#ifdef parallel
+      USE SE_MODULES            ! stenex (using SE_UTIL_MODULE)
+#else
+      USE NOOP_MODULES          ! stenex (using NOOP_UTIL_MODULE)
+#endif
 
 
 
