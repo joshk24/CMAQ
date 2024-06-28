@@ -518,9 +518,6 @@ C Convention: the input file concentration units are always ppmV.
          CALL INITSCEN ( CGRID, TSTEP )
          JDATE = STDATE; JTIME = STTIME
         
-C JTK call OPASSIM module for running GSI         
-         CALL OPASSIM ( CGRID, JDATE, JTIME, TSTEP(1) )
-
 #ifdef sens
          STARTDATE = STDATE   ! save variable into DDM3D module
 #endif
@@ -694,6 +691,11 @@ C Get synchronization and advection time steps, TSTEP(2), ASTEP(L) and NREPS
                END DO
             END DO
 #endif
+
+
+
+C JTK call ASSIMRUN module for running GSI
+         CALL ASSIMRUN ( CGRID, JDATE, JTIME, TSTEP )
 
          IF ( W_VEL )
      &      AVG_WVEL( :,:,: ) = WVEL( :,:,ACONC_BLEV:ACONC_ELEV )
