@@ -75,7 +75,7 @@ c     IMPLICIT NONE
           REAL, POINTER :: CGRID( :,:,:,: )  ! for initial CONC
           INTEGER      :: JDATE        ! starting date (YYYYDDD)
           INTEGER      :: JTIME        ! starting time (HHMMSS)
-          INTEGER      :: TSTEP        ! output timestep (HHMMSS)
+          INTEGER      :: TSTEP(3)        ! output timestep (HHMMSS) - JTK changed into array to fix dummy argument issue in driver.F
           ! Variables to control ASSIM output and script
           LOGICAL ::  exists, STATUS
           INTEGER :: checkcount
@@ -99,6 +99,7 @@ c     IMPLICIT NONE
                     ! environmental variable that points to the current state.
                     ! from that file, it can identify the JDATE, JTIME and available
                     ! variables.
+                    CALL SUBST_BARRIER !JTK prevents race between opASSIM and run.gsi.ksh
                     call system(ASSIMSCRIPT, STATUS)
                     IF (STATUS.ne.0) THEN
                         XMSG='***Failure, ASSIM script failed'
