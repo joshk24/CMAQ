@@ -42,6 +42,7 @@ c     IMPLICIT NONE
       integer :: ASSIMTSTEP = 10000
       character*1024 :: ASSIMSCRIPT
       logical :: LDOASSIM
+      character(16) :: CTMASSIM = 'CTM_ASSIM_1'
      
       CONTAINS
 
@@ -77,8 +78,8 @@ c     IMPLICIT NONE
           INTEGER      :: JTIME        ! starting time (HHMMSS)
           INTEGER      :: TSTEP(3)        ! output timestep (HHMMSS) - JTK changed into array to fix dummy argument issue in driver.F
           ! Variables to control ASSIM output and script
-          LOGICAL ::  exists, STATUS
-          INTEGER :: checkcount
+          LOGICAL ::  exists
+          INTEGER :: checkcount, STATUS
           LOGICAL, SAVE :: FIRST = .true.
           character*1024 :: XMSG ! JTK
           character*1024 :: PNAME ! JTK
@@ -92,15 +93,22 @@ c     IMPLICIT NONE
           IF ( LDOASSIM ) then ! switch for ASSIM on or off
               ! check if CMAQ is at an ASSSIMILATION time
               IF ( MOD( TIME2SEC( JTIME ), TIME2SEC( ASSIMTSTEP ) ) .EQ. 0 ) THEN
-                  ! Output CTM_ASSIM_1
+                  CALL EXECUTE_COMMAND_LINE('rm -f ' // CTMASSIM, EXITSTAT=STATUS)
+                  IF (STATUS.ne.0) THEN
+                      XMSG='***Failure, rm CTMASSIM failed'
+                      CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
+                  ENDIF
+                 ! Output CTM_ASSIM_1
                   call opASSIM(cgrid,jdate,jtime,tstep(1))
+                  CALL SUBST_BARRIER !JTK prevents race between opASSIM and run.gsi.ksh
                   IF (mype.eq.0) THEN ! IF PRIMARY PROCESSOR
                     ! ASSIMSCRIPT should assume the existence of the CTM_ASSIM_1
                     ! environmental variable that points to the current state.
                     ! from that file, it can identify the JDATE, JTIME and available
                     ! variables.
-                    CALL SUBST_BARRIER !JTK prevents race between opASSIM and run.gsi.ksh
-                    call system(ASSIMSCRIPT, STATUS)
+                    CALL EXECUTE_COMMAND_LINE(ASSIMSCRIPT, EXITSTAT=STATUS)
+                    print *, "ASSIMSCRIPT", ASSIMSCRIPT
+                    print *, "EXITSTAT", EXITSTAT
                     IF (STATUS.ne.0) THEN
                         XMSG='***Failure, ASSIM script failed'
                         CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
@@ -112,10 +120,11 @@ c     IMPLICIT NONE
                   call rdASSIM(jdate,jtime,cgrid)
               ENDIF ! IF ISASSIMTIME
           ENDIF ! END ASSIM SWITCH
+
       END SUBROUTINE ASSIMRUN
 
 !:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-      SUBROUTINE OPASSIM (CGRID, JDATE, JTIME, TSTEP )
+      SUBROUTINE opASSIM (CGRID, JDATE, JTIME, TSTEP )
           ! OPASSIM outputs CGRID to a netcdf file for assimilation
           ! script to read in
           USE GRID_CONF             ! horizontal & vertical domain specifications
@@ -146,7 +155,6 @@ c     IMPLICIT NONE
 
     ! environment variable for no. of layers from bottom to save on CONC file
           CHARACTER( 16 ) :: NLAYS_CONC = 'NLAYS_CONC'
-          character(16) CTMASSIM
 
     !  environment variable description
           CHARACTER( 80 ) :: VARDESC
@@ -232,7 +240,7 @@ c     IMPLICIT NONE
 
     ! create header
           IF ( MYPE .EQ. 0 ) THEN   ! open new
-             IF ( .NOT. OPEN3( CTMASSIM, FSNEW3, PNAME ) ) THEN
+             IF ( .NOT. OPEN3( CTMASSIM, FSCREA3, PNAME ) ) THEN
                 XMSG = 'opASSIM Could not open ' // CTMASSIM // '. File may already exist.' 
                 CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
              END IF
@@ -298,7 +306,6 @@ c     IMPLICIT NONE
           INCLUDE SUBST_CONST       ! constants
           INCLUDE SUBST_FILES_ID    ! file name parameters
 
-          CHARACTER( 16 ) :: FNAME = 'CTM_ASSIM_1'
           INTEGER      JDATE
           INTEGER      JTIME,l,r,c
           REAL, POINTER :: CGRID( :,:,:,: )  ! for initial CONC
@@ -311,12 +318,13 @@ c     IMPLICIT NONE
           INTEGER :: INO2=-1,VNO2=-1 ! pointer to NO2 information
           INTEGER :: SPC=0
 
-          IF ( .NOT. OPEN3( FNAME, FSREAD3, PNAME ) ) THEN
-             XMSG = 'Could not open ' // FNAME // ' file'
+          IF ( .NOT. OPEN3( CTMASSIM, FSREAD3, PNAME ) ) THEN
+             XMSG = 'Could not open ' // CTMASSIM // ' file'
              CALL M3EXIT ( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
           END IF
-          CALL SUBHFILE ( fname, GXOFF, GYOFF,
+          CALL SUBHFILE ( CTMASSIM, GXOFF, GYOFF,
      &                STRTCOLINI, ENDCOLINI, STRTROWINI, ENDROWINI )
+
           DO SPC = 1, N_C_GC_SPC
              if( C_GC_SPC( SPC ).eq.'NO2')then
                INO2=SPC
@@ -328,11 +336,11 @@ c     IMPLICIT NONE
                 XMSG = 'Could not find NO2'
                 CALL M3EXIT( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
           endif
-          IF ( .NOT. XTRACT3( FNAME, VNAME3D ( 1 ),
+          IF ( .NOT. XTRACT3( CTMASSIM, VNAME3D ( 1 ),
      &           1,NLAYS, STRTROWINI,ENDROWINI, STRTCOLINI,ENDCOLINI,
      &           JDATE, JTIME, DBUFF ) ) THEN
                    XMSG = 'Could not read ' // TRIM( VNAME3D( 1 ) )
-     &              // ' from ' // FNAME
+     &              // ' from ' // CTMASSIM
                    CALL M3EXIT ( PNAME, JDATE, JTIME, XMSG, XSTAT1 )
           END IF
           INDX = CONC_MAP( VNO2 )
@@ -343,8 +351,8 @@ c     IMPLICIT NONE
               END DO
             END DO
           END DO
-          IF ( .NOT. CLOSE3( fname ) ) THEN 
-            XMSG = 'rdassim Could not close file "' // TRIM( fname ) // '"'
+          IF ( .NOT. CLOSE3( CTMASSIM ) ) THEN 
+            XMSG = 'rdassim Could not close file "' // TRIM( CTMASSIM ) // '"'
             CALL M3EXIT( PNAME, 0, 0, XMSG, XSTAT2 )
           END IF
           RETURN
