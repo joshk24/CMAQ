@@ -71,7 +71,7 @@ c     IMPLICIT NONE
           USE RUNTIME_VARS
           USE CENTRALIZED_IO_MODULE
 
-          IMPLICIT NONE
+          !IMPLICIT NONE JTK commented to fix compilation error 1/29/25
 
           REAL, POINTER :: CGRID( :,:,:,: )  ! for initial CONC
           INTEGER      :: JDATE        ! starting date (YYYYDDD)
